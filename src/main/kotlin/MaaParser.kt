@@ -10,12 +10,8 @@ import kotlin.reflect.KProperty
 
 // my own parser, that handles eft recursion fine
 /*
- important LIMITATION:
- - unicode characters that do not fit into 2 bytes cannot be part of grammar
- - zpracovává CHAR at a time
- - still can pass through directly, in say, a string literal, but cannot dispatch ont them
 
- name: Naive LeftReducing Backtracking Parser / ParserGeneerator(future)
+ name: Naive LeftReducing Backtracking Parser / ParserGenerator(future)
  :: dubbed LRB
 
 * */
@@ -182,7 +178,7 @@ open class Factory {
 
 
 //TODO: will include: col,row, sbOffset after allowed to delete too old.. etc.
-data class Pin(val pos: Int)
+data class Pin(val pos: Int, val row:Int, val col:Int)
 
 class Stack(
     val next: Stack?,
@@ -216,7 +212,17 @@ class Context(private val src: Reader) : CharSequence {
     private val sb = StringBuffer()
     private var srcEmpty = false //set to true once I read last data from src:Reader
 
-    private var pos = 0 //position of cur in sb
+    private var pos = 0 //position of 'parser head' from start of src
+    private var shift = 0 //how much was deleted from left of buffer
+    //(pos-shift) = position of 'parser head' in sb
+    // - shift comes from shifting the 'window' along, instead of just growing it
+    // -- also, in js and in bash : that method removes from start
+
+    //as parser progresses: pos ONLY increases
+    // -- decreased == went back == backtracking
+
+    private var row = 0 //how many \n seen in src before pos          --- dubs row
+    private var col = 0 //#of chars from nearest \n|startOfSrc to pos --- dubs column
 
     //if I want to prevent full search, and instead limit bugger
     // - can turn into ~LL(c) by only keeping some size of buffer
@@ -229,17 +235,15 @@ class Context(private val src: Reader) : CharSequence {
     // - FOR NOW: NO BUFFER DELETING
 
     //TODO: all position state
-    fun pin() = Pin(pos)
+    // DO NOT STORE SHIFT -- shift cannot be undone
+    fun pin() = Pin(pos, row, col)
 
     fun reset(pin: Pin) {
         //TODO: all vals
         pos = pin.pos
-    }
-
-    fun informFailedBranch(s: Stack) {
-        //TODO: store last N, providing them as 'what went wrong' information
-        //for now to test it: just show right away
-        println("failed: $s IS: ${substring(0,10).replace("\n", "\\n")}")
+        row = pin.row
+        col = pin.col
+        //TODO: throw "cannot backtrack" if (pos-shift)<0
     }
 
     private tailrec fun nom(): Boolean {
@@ -276,9 +280,15 @@ class Context(private val src: Reader) : CharSequence {
         return true
     }
 
+    fun informFailedBranch(s: Stack) {
+        //TODO: store last N, providing them as 'what went wrong' information
+        //for now to test it: just show right away
+        println("failed: $s IS: ${substring(0,10).replace("\n", "\\n")}")
+    }
 
-    //there will be something special, implementing lazy CharSequence
-    // -- it will load as many
+    fun informParsedTopLevel(){
+        //TODO: trim buffer: before is not needed
+    }
 
 
     private fun ensureLookahead(pp: Int) {
@@ -516,6 +526,7 @@ class Terminal<T : Any>(
             //println("match ${name} = ${it.value}")
             println("match: ${Stack(stackUp, this, pin)}  == \"${it.value}\"")
             val ret = wrap(pin, it)
+
             //matchResult has ref to yy: must not change, until processed
             // - hence move must be after wrap
             yy.move(it.value.length)

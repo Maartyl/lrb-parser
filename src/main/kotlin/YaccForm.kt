@@ -3,7 +3,6 @@ import cz.maa.parser.Parser
 import java.io.FileReader
 import java.io.Reader
 import java.io.StringReader
-import kotlin.reflect.KProperty
 
 
 object YF : Factory() {
@@ -51,8 +50,6 @@ exp:      NUM                { ${'$'}${'$'} = ${'$'}1;                         }
 
     @JvmStatic
     fun main(args: Array<String>) {
-        //println(testInput.substring(0, 17))
-        //println(testInput.substring(17, 40))
         if (args.isEmpty()) {
             StringReader(ti2).use(::parsePrint)
         } else {
