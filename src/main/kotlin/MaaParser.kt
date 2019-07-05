@@ -136,11 +136,20 @@ class LRBParser<T : Any>(rootParserDefinition: Parser<T>) {
     private val p = compileParser(rootParserDefinition)
 
     @Suppress("UNCHECKED_CAST")
-    fun parseOne(r: Reader) = p.parse(frameEmpty, Context(r), Stack.top) as? T
+    fun parseOne(r: Reader) = Context(r).let { yy ->
+        p.parse(frameEmpty, yy, Stack.top)?.also {
+            yy.informParsedTopLevel()
+        } as? T
+    }
 
     @Suppress("ReplaceSingleLineLet", "UNCHECKED_CAST")
     fun parseAll(r: Reader) = Context(r).let { yy ->
-        generateSequence { p.parse(frameEmpty, yy, Stack.top)?.let { it as T } }
+        generateSequence {
+            p.parse(frameEmpty, yy, Stack.top)?.let {
+                yy.informParsedTopLevel()
+                it as T
+            }
+        }
     }
 }
 
@@ -154,7 +163,7 @@ open class Factory {
         }
     }
 
-    companion object Factory {
+    companion object {
         /**
         IMPORTANT: must not use MatchResult after leaving wrap
         -- MatchResult becomes unusable, and you may not retain reference to it
@@ -167,7 +176,7 @@ open class Factory {
 
         fun <T : Any> lrb(root: Parser<T>) = LRBParser(root)
 
-        //DANGEROUS:: when in loop: will never move, and infinite loop
+        //DANGEROUS:: when in loop: will never move -> infinite loop
         fun <T : Any> Parser<T>.opt(dflt: T) =
             rule<T>("anon_${this.name}_opt")
                 .alt(this)
@@ -178,7 +187,14 @@ open class Factory {
 
 
 //TODO: will include: col,row, sbOffset after allowed to delete too old.. etc.
-data class Pin(val pos: Int, val row:Int, val col:Int)
+data class Pin(
+    val pos: Int,
+    val row: Int,
+    val col: Int,
+    //who it came from + provides context to handlers
+    // - Pin will implement some intrerface exposed to handlers
+    private val yy: Context
+)
 
 class Stack(
     val next: Stack?,
@@ -218,6 +234,8 @@ class Context(private val src: Reader) : CharSequence {
     // - shift comes from shifting the 'window' along, instead of just growing it
     // -- also, in js and in bash : that method removes from start
 
+    private inline val posSb get() = pos - shift
+
     //as parser progresses: pos ONLY increases
     // -- decreased == went back == backtracking
 
@@ -234,16 +252,39 @@ class Context(private val src: Reader) : CharSequence {
     // --- btw. it will be impossible to read regexes longer than this
     // - FOR NOW: NO BUFFER DELETING
 
-    //TODO: all position state
     // DO NOT STORE SHIFT -- shift cannot be undone
-    fun pin() = Pin(pos, row, col)
+    fun pin() = Pin(pos, row, col, this)
+
+    class CannotBacktrack(str: String) : IllegalStateException(str)
 
     fun reset(pin: Pin) {
-        //TODO: all vals
+        if ((pin.pos - shift) < 0) {
+            throw CannotBacktrack(
+                "buffer no longer available. (required:${pin.pos}, minimal:$shift); buffer:${
+                substring(0, posSb)}"
+            )
+            //TODO: better buffer substring: make it until FURTHEST failure yet
+            // -- all of that must have matched, before backtracked all the way here
+            // - problem only with very long regexes, but it's STATED that regex cannot match more than backtracking N
+        }
+
         pos = pin.pos
         row = pin.row
         col = pin.col
-        //TODO: throw "cannot backtrack" if (pos-shift)<0
+    }
+
+    //-1 == unprotected
+    // - otherwise: any auto-buffer-delete CANNOT delete before and including this pos
+    private var protectPosFromDelete = 0
+
+    private inline fun <T> protectingPos(p: Int = pos, body: () -> T): T {
+        val outer = protectPosFromDelete
+        try {
+            protectPosFromDelete = p
+            return body()
+        } finally {
+            protectPosFromDelete = outer
+        }
     }
 
     private tailrec fun nom(): Boolean {
@@ -266,34 +307,94 @@ class Context(private val src: Reader) : CharSequence {
         return true
     }
 
-
-    //for use by normal parsers - .... seems they don't need it... - only terminal reads chars, after all...
-    //val cur: Char get() = if (pos < sb.length) sb[pos] else Char.MIN_VALUE
-    //fun move() = move(1)
-    fun move(by: Int): Boolean {
-        //TODO check (by>=0)
+    @Suppress("NOTHING_TO_INLINE")
+    private inline fun moveCore(by: Int): Boolean {
         pos += by
-        while (pos >= sb.length) {
+        while (posSb >= sb.length) {
             if (!nom())
                 return false
         }
         return true
     }
 
+    fun move(by: Int): Boolean {
+        //check (by>=0) ... is it needed?
+        // - could underflow buffer... yeah...
+        // - NEEDED for row,col computing;; only backtracking can move back
+//        if (by + posSb < 0)
+//            throw IndexOutOfBoundsException("pos:$pos shift:$shift by:$by")
+        if (by <= 0)
+            throw IllegalArgumentException("must be (>0); is: by:$by")
+
+        //in future, nom will also be able to delete? ... NO
+
+        //count #of \n in (pos, pos+by)
+        //
+
+        //actually, this protecting should not be needed
+        // - I CAN NEVER DELETE what is under pos.... obviously
+        // OOOH! . but it ISN'T -- this has moved position, by the time nom is called
+        // OK, makes sense! nice ^^
+        protectingPos {
+            val start = posSb
+            var end = posSb + by //NOT INCLUSIVE (for search);; by is len
+            return moveCore(by).also {
+                if (!it) //end of Reader:: do not read after end
+                    end = sb.length
+
+                var ncount = 0 //#of seen \n-s
+                var npos = -1 //last seen \n
+                //UNTIL: do not process the current pos yet
+                // - included at the start of this loop (next time)
+                for (i in start until end) {
+                    if (sb[i] == '\n') {
+                        ncount++
+                        npos = i
+                    }
+                }
+                row += ncount
+                if (npos >= 0) {
+                    //seen \n -- col is len from that
+                    col = (end - npos)
+                } else {
+                    //not seen \n -- just add to current col
+                    col += (end - start)
+                }
+            }
+        }
+    }
+
     fun informFailedBranch(s: Stack) {
         //TODO: store last N, providing them as 'what went wrong' information
-        //for now to test it: just show right away
-        println("failed: $s IS: ${substring(0,10).replace("\n", "\\n")}")
+        // - better: N that went furthest, maybe?
+        //for now, for testing: just show right away
+        println("failed: $s IS: ${substring(0, 10).replace("\n", "\\n")}")
     }
 
-    fun informParsedTopLevel(){
-        //TODO: trim buffer: before is not needed
+    fun informParsedTopLevel() {
+        //trim buffer: before 'here' is not needed anymore - already fully parsed
+        ltrimSb(0)
     }
 
+    private fun ltrimSb(untilPosRelative: Int) {
+        val u = posSb + untilPosRelative //exclusive shift end
+        //will delete buffer up to (posSb+arg)
+        //out of range values are handled as maximum in that direction
+
+        when {
+            u < 0 -> return //buffer already shorter
+            u > posSb -> throw IllegalArgumentException("ltrimSb: only (<=0) arguments allowed")
+            else -> {
+                sb.delete(0, u) //end is exclusive
+                shift += u
+            }
+        }
+    }
 
     private fun ensureLookahead(pp: Int) {
+        //pp is position in buffer
         if (pp < 0)
-            return //TODO: once... idk...
+            return //for now: always fine, and getc will just return 0
 
         while (pp >= sb.length) {
             if (!nom()) {
@@ -304,51 +405,35 @@ class Context(private val src: Reader) : CharSequence {
         }
     }
 
-    override val length: Int //I really hope this will work
+    override val length: Int //seems to work
         get() = /*if (srcEmpty) sb.length - pos else*/ (Int.MAX_VALUE - 1000)
 
     override fun get(index: Int): Char {
-        val i = pos + index
+        val i = posSb + index
         ensureLookahead(i)
         return getc(i)
     }
 
-    private fun getc(i: Int) = if (i < sb.length) sb[i] else Char.MIN_VALUE
+    private fun getc(i: Int) = if (i >= 0 && i < sb.length) sb[i] else Char.MIN_VALUE
 
     override fun subSequence(startIndex: Int, endIndex: Int): CharSequence {
-
-        val ia = pos + startIndex
-        val ie = pos + endIndex
+        val ia = posSb + startIndex
+        val ie = posSb + endIndex
         ensureLookahead(ie - 1)
 
         if (ie >= sb.length) {
-            //println("subseq $ia $ie ($startIndex $endIndex)")
-            //custom subsequence
             //cannot use normal: sb is shorter
             // -- this should not be problem: shold only happen at the end
             return buildString {
                 for (i in ia until ie)
                     append(getc(i))
             }
-//            return object : CharSequence {
-//                override val length: Int get() = ie - ia
-//
-//                override fun subSequence(startIndex: Int, endIndex: Int): CharSequence {
-//                    TODO("not implemented subSequence")
-//                }
-//
-//                override fun get(index: Int): Char = getc(index + ia)
-//
-//                override fun toString() = String(thi)
-//            }
-
-
         }
         //can use normal, fast
         return sb.subSequence(ia, ie)
     }
 
-    class UnexpectedEofInLookahead : Exception("UnexpectedEofInLookahead")
+    class UnexpectedEofInLookahead : Exception()
 }
 //part of it is 'character enumerator'
 // - can move (set new current) and always provide current
@@ -756,9 +841,9 @@ class Reducing<T : Any>(
 
         for (s in repeatAlts) {
             args.clear()
+            args.add(hv)
             stack.chainPos = 1
             if (parseAll(pin, args, s.ps, yy, stack)) {
-                args.add(0, hv)
                 return s.wrapPlus(pin, args)
             }
         }
@@ -766,29 +851,42 @@ class Reducing<T : Any>(
     }
 
     override fun parse(f: Frame, yy: Context, stackUp: Stack): Any? {
-        //println("reducH $name @ ${yy.substring(0, 2)}")
 
-        var pin = yy.pin()
-        val args = mutableListOf<Any>()
-        val ff = Frame(args, pin = pin)
+        var hv = head.parse(f, yy, Stack(stackUp, this))
+            ?: return null //parser already failed: nothing else needed
 
-        var hv =
-            head.parse(ff, yy, Stack(stackUp, this, pin)) ?: return null  //parsr already failed: nothing else needed
         //parsed head
         // now try to match suffix as many times as possible
 
+        var pin = yy.pin()
+        val args = mutableListOf<Any>()
+
         while (true) {
-            pin = yy.pin()
-            println("LOOP $name: acc: $hv")
+            //println("LOOP $name: acc: $hv")
             // always must try all alts in order; if any matches: I repeat
-            val sv = parseAnyAlt(hv, pin, args, yy, Stack(stackUp, this, pin))
-            if (sv == null)
-                return hv
-            else {
-                hv = sv //reducing:: update acc with next value
-            }
+//            val sv = parseAnyAlt(hv, pin, args, yy, Stack(stackUp, this, pin))
+//            if (sv == null)
+//                return hv
+//            else {
+//                hv = sv
+//            }
+
+            //reducing:: update acc with next value
+            hv = parseAnyAlt(hv, pin, args, yy, Stack(stackUp, this, pin))
+                ?: return hv
+
+
+            val pinOldPos = pin.pos
+            pin = yy.pin()
+            if (pinOldPos == pin.pos)
+                throw InfiniteRecursion(
+                    "in rule: $name ; input.pos: $pinOldPos ; " +
+                            "alts-suffixes: ${repeatAlts.joinToString(" ") { it.name }}"
+                )
         }
     }
+
+    class InfiniteRecursion(msg: String) : Exception(msg)
 
     //ALSO: only rules need to be compiled... - chains are fine as they are
     // -- chains only need to be inlined later, but that is still fine...
@@ -835,18 +933,8 @@ class Reducing<T : Any>(
         protectRecur<IParser>(this, vs, { this }) {
             head = head.simplify(vs)
             repeatAlts = repeatAlts.map { it.simplify(vs) }
-
             this
-
-
-//            val h2 = head.simplify(vs)
-//            val r2 = repeatAlts.map { it.simplify(vs) }
-//            if (h2 == head && eqList(repeatAlts, r2))
-//                this
-//            else
-//                Reducing<T>(name+ dbgUniqNext, h2, r2)
         }
-
 }
 
 fun <T> eqList(l: List<T>, r: List<T>): Boolean {

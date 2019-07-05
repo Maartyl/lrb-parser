@@ -26,9 +26,10 @@ Only reduces left recursion in first element of a chain (rule-alt)
 
 ## TODO
 - error reporting
-- track row,col
-- improvements
+-[x] track row,col
+- general improvements
 - proper testing
+- providing better 'position+context' interface to handlers
 - optimization/limitation: optionally Limit backtracking to N(+c) characters
     - as is right now, will keep buffer of entire top-level structure in memory
     - not a problem for parsing smaller files
@@ -42,10 +43,9 @@ Only reduces left recursion in first element of a chain (rule-alt)
 #### tmp terminology
 - `rule`: top level yacc construct. Has a list of alternatives.
 - `chain`: a sequence of elements
-- `rule-alt` or `branch`: a chain that is one of the alternatives of a rule
-    - `rule-alt` implies thinking about the 1D chain
-    - `bracnh` implies thinking about the entire subtree
+- `rule-alt`: a chain that is one of the alternatives of a rule
 - `element`:  (rule reference OR lexem)
+- `bracnh`: a path through graph, either matching the input, or failing (followed by trying another branch)
 - `lexem`: something that will actually match some length of text
     - for now, a regexp
 
