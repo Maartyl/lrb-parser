@@ -26,7 +26,7 @@ Only reduces left recursion in first element of a chain (rule-alt)
 
 ## TODO
 - error reporting
--[x] track row,col
+- [x] track row,col
 - general improvements
 - proper testing
 - providing better 'position+context' interface to handlers
