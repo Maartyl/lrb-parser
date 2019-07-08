@@ -23,6 +23,8 @@ build/
 !**/test/**/build
 *.iml
 !**/testData/**/*.iml
+.idea/dictionaries
+.idea/codeStyles
 .idea/libraries/Gradle*.xml
 .idea/libraries/Maven*.xml
 .idea/artifacts/PILL_*.xml

@@ -10,7 +10,7 @@ For now, mostly a proof of concept (it probably alraedy exists, but I haven't fo
     - I found a way to remove it, without a need to change 'handlers' (code generating ast nodes; after rule-alt)
     - Surely nothing new. Maybe even wrong. I just haven't found it.
     
-I also wanted a tiny parser, that can easily be included in projects, etc. (also portable; hence java)
+I also wanted a tiny parser, that can easily be included in projects, etc. (also portable; hence jvm)
 
 If you feel I stole your idea, please tell me! I will most likely prefer to use your parser than spend time writing this. 
 (but I swear I thought of it myself - not copying anything I've found)
