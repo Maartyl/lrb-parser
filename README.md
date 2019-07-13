@@ -19,8 +19,8 @@ If you feel I stole your idea, please tell me! I will most likely prefer to use 
 ### Limitations
 When a rule-alt does not start with left recursion (including indirect), but contains it: 
 all of the terminals combined before reaching the recursive step **must not** match empty string. 
-If the parser does not move before reaching left recursion, it will allow infinite loop.
-As a rule of thumb: terminals that match emoty string may only be at the end of a chain.
+If the parser does not move before reaching recursion, it will allow infinite loop.
+As a rule of thumb: terminals that match empty string may only be at the end of a chain.
 
 Only reduces left recursion in first element of a chain (rule-alt)
 
